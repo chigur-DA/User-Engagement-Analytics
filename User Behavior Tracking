@@ -1,0 +1,83 @@
+WITH account_stats AS (
+  -- 1. Метрики по акаунтах
+  SELECT
+    s.date AS date,
+    sp.country,
+    a.send_interval,
+    a.is_verified,
+    a.is_unsubscribed,
+    COUNT(DISTINCT a.id) AS account_cnt,
+    0 AS sent_msg,
+    0 AS open_msg,
+    0 AS visit_msg
+  FROM `DA.account` AS a
+  INNER JOIN `DA.account_session` AS acs ON a.id = acs.account_id
+  INNER JOIN `DA.session` AS s ON acs.ga_session_id = s.ga_session_id
+  INNER JOIN `DA.session_params` AS sp ON s.ga_session_id = sp.ga_session_id
+  GROUP BY 1, 2, 3, 4, 5
+),
+
+
+email_stats AS (
+  -- 2. Метрики по емейлах:
+  SELECT
+    DATE_ADD(s.date, INTERVAL es.sent_date DAY) AS date,
+    sp.country,
+    a.send_interval,
+    a.is_verified,
+    a.is_unsubscribed,
+    0 AS account_cnt,
+    COUNT(DISTINCT es.id_message) AS sent_msg,
+    COUNT(DISTINCT eo.id_message) AS open_msg,
+    COUNT(DISTINCT ev.id_message) AS visit_msg
+  FROM `DA.email_sent` AS es
+  INNER JOIN `DA.account` AS a ON es.id_account = a.id
+  INNER JOIN `DA.account_session` AS acs ON a.id = acs.account_id
+  INNER JOIN `DA.session` AS s ON acs.ga_session_id = s.ga_session_id
+  INNER JOIN `DA.session_params` AS sp ON s.ga_session_id = sp.ga_session_id
+  LEFT JOIN `DA.email_open` AS eo ON es.id_message = eo.id_message
+  LEFT JOIN `DA.email_visit` AS ev ON es.id_message = ev.id_message
+  GROUP BY 1, 2, 3, 4, 5
+),
+
+
+unified_base AS (
+  -- 3. Об'єднання результатів
+  SELECT * FROM account_stats
+  UNION ALL
+  SELECT * FROM email_stats
+),
+
+
+aggregated_with_sums AS (
+  -- 4. Розрахунок
+  SELECT
+    date,
+    country,
+    send_interval,
+    is_verified,
+    is_unsubscribed,
+    SUM(account_cnt) AS account_cnt,
+    SUM(sent_msg) AS sent_msg,
+    SUM(open_msg) AS open_msg,
+    SUM(visit_msg) AS visit_msg,
+    SUM(SUM(account_cnt)) OVER (PARTITION BY country) AS total_country_account_cnt,
+    SUM(SUM(sent_msg)) OVER (PARTITION BY country) AS total_country_sent_cnt
+  FROM unified_base
+  GROUP BY 1, 2, 3, 4, 5
+),
+
+final_table AS (
+  -- 5.  Розрахунок рангів
+  SELECT *,
+    DENSE_RANK() OVER (ORDER BY total_country_account_cnt DESC) AS rank_total_country_account_cnt,
+    DENSE_RANK() OVER (ORDER BY total_country_sent_cnt DESC) AS rank_total_country_sent_cnt
+  FROM aggregated_with_sums
+)
+
+
+-- 6. Вивід ТОП-10
+SELECT * FROM final_table
+WHERE rank_total_country_account_cnt <= 10
+   OR rank_total_country_sent_cnt <= 10
+ORDER BY date DESC, country;
