@@ -1,0 +1,36 @@
+CREATE VIEW `Students.v_CHIGUR_view_task` AS
+  SELECT
+    CAST(s.date AS DATE) AS report_date,
+    SUM(p.price) AS daily_revenue
+  FROM `DA.session` s
+  JOIN `DA.order` o
+  ON s.ga_session_id = o.ga_session_id
+  JOIN `DA.product` p
+   ON o.item_id = p.item_id
+  GROUP BY 1
+
+  WITH fullDate AS (
+  SELECT
+    rp.date AS report_date,
+    rp.predict AS daily_predict,
+    COALESCE(v.daily_revenue, 0) AS daily_revenue
+  FROM `DA.revenue_predict` rp
+  LEFT JOIN `Students.v_CHIGUR_view_task` v
+  ON rp.date = v.report_date
+),
+
+RunningTotal AS (
+  SELECT
+    report_date,
+    SUM(daily_revenue) OVER (ORDER BY report_date) AS cum_revenue,
+    SUM(daily_predict) OVER (ORDER BY report_date) AS cum_predict
+  FROM fullDate
+)
+
+SELECT
+    report_date,
+    cum_revenue,
+    cum_predict,
+    ROUND(SAFE_DIVIDE(cum_revenue, cum_predict) * 100, 2) AS fulfillment_pct
+FROM RunningTotal
+ORDER BY report_date;
